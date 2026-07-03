@@ -23,8 +23,9 @@ data = "data/predictive_maintenance.csv"
 df = ingest(data)
 #load model
 try:
-    model = joblib.load("model/rf_predictive_maintenance.joblib")
-    st.success(f"Model loaded")
+    rf_model = joblib.load("model/rf_predictive_maintenance.joblib")
+    lr_model = joblib.load("model/lr_predictive_maintenance.joblib")
+    st.success(f"Models loaded")
            
 except Exception as e:
     raise FileExistsError("Model file does not exist...")
@@ -33,16 +34,13 @@ with open("results/metrics.json", "r") as f:
     metrics = json.load(f)
 with open("results/tests.json", "r") as t:
     test_metrics = json.load(t)
-    #values => np.array([type, air_temp, process_temp, rotation_speed, 
-    #                    torque, tool_wear]).reshape(1, -1)
-    #template(on click) => model.predict(values)
+
     
 #Charts
-
 def plot_confusion(y_test, rf_ypred,labels=None):
     title = f"Actual vs Predicted Values"
     if labels is None:
-        labels = ["low", "medium", "high"]
+        labels = np.unique(rf_ypred)
         
     cm = confusion_matrix(y_test, rf_ypred)
     fig, ax = plt.subplots(figsize=(5, 4))
@@ -88,6 +86,29 @@ def bar_graph(metrics_json):
     plt.tight_layout()
     return fig
 
+def confustion_plot(y_test, X_test, rf_model, log_model):
+    # Don't retrain — just predict
+    y_predict = rf_model.predict(X_test)
+    y_predic = log_model.predict(X_test)
+    
+    
+    rf_cm = confusion_matrix(y_test, y_predict, labels=rf_model.classes_)
+    log_cm = confusion_matrix(y_test, y_predic, labels=log_model.classes_)
+    
+    fig, ax = plt.subplots(1, 2, figsize=(12, 5))
+    
+    ConfusionMatrixDisplay(rf_cm, display_labels=rf_model.classes_).plot(ax=ax[0], cmap="Blues")
+    ax[0].set_title("Random Forest Classifier")
+    ax[0].tick_params(axis='x', rotation=90)
+    
+    ConfusionMatrixDisplay(log_cm, display_labels=log_model.classes_).plot(ax=ax[1], cmap="Blues")
+    ax[1].set_title("Logistic Regression")
+    ax[1].tick_params(axis='x', rotation=90)
+    
+    plt.tight_layout()
+    return fig
+
+
 
 def home_page():
     st.title("Predictive Maintenance Dashboard Analytics")
@@ -97,40 +118,98 @@ def home_page():
     X_rtest =np.array([test_metrics["Test01"]["values"], test_metrics["Test02"]["values"], 
                 test_metrics["Test03"]["values"], test_metrics["Test04"]["values"],
                 test_metrics["Test05"]["values"],test_metrics["Test06"]["values"]])
-    y_test = np.array([1, 0, 2, 1, 0, 2])  # 0=low, 1=medium, 2=high
+    
+    # 0:"Heat Dissipation Failure"
+    # 1:"No Failure"
+    # 2:"Overstrain Failure"
+    # 3:"Power Failure"
+    # 4:"Random Failures"
+    # 5:"Tool Wear Failure"
+    y_dtest = np.array([1, 3, 1, 2, 2, 1])
             
-    if model is not None:
-        y_pred = model.predict(X_rtest)
+    if rf_model is not None:
+        y_pred = rf_model.predict(X_rtest)
 
         labels = sorted(df["Failure Type"].unique())
         label_map = {label: i for i, label in enumerate(labels)}
         y_pred_int = np.array([label_map[p] for p in y_pred])
             
         reverse_map = {v: k for k, v in label_map.items()}
-        y_test_str = np.array([reverse_map[y] for y in y_test])
+        y_test_str = np.array([reverse_map[y] for y in y_dtest])
 
 
     #Chart selection
     st.subheader("Metrics Charts")
     chart_type = st.selectbox("select a chart",
-                            ["Confusion Metrics", "Model Accuracy Bar graph"])
+                            ["Actual vs Predicted Tests Heatmap", "Model Accuracy Bar graph", "Confusion Metrics(From training data)"])
 
-    c_col1, c_col2= st.columns(2)
-    if chart_type == "Confusion Metrics":
-        with c_col1:
-            st.pyplot(plot_confusion(y_test_str, y_pred))
-        with c_col2:
-            # Per-class metrics
-            st.write("Per-Class Metrics")
-            from sklearn.metrics import classification_report
-            report = classification_report(y_test_str, y_pred, output_dict=True)
-            st.dataframe(pd.DataFrame(report).transpose())
+    if chart_type == "Actual vs Predicted Tests Heatmap":
+        
+        st.pyplot(plot_confusion(y_test_str, y_pred))
+        
+        # Build  Custom Predictions table
+        feature_cols = [
+            'Type', 'Air temperature [K]', 'Process temperature [K]', 
+            'Rotational speed [rpm]', 'Torque [Nm]', 'Tool wear [min]'
+        ]
+
+        results_df = pd.DataFrame(X_rtest, columns=feature_cols)
+        results_df.insert(0, 'Test', [f"Data {i+1}" for i in range(len(X_rtest))])
+        results_df['Predicted'] = y_pred  # your string predictions
+
+        # Display
+        st.subheader("Custom Predictions with Random Forest Classifier")
+        st.table(results_df)
+        
+        # Per-class metrics
+        st.subheader("Per-Class Metrics")
+        correct = sum(1 for a, b in zip(y_dtest, y_pred_int) if a == b)
+        st.write(f"Correct: {correct}/{len(y_dtest)} = {correct/len(y_dtest):.2%}")
         
     elif chart_type == "Model Accuracy Bar graph":
         st.pyplot(bar_graph(metrics))
+        st.subheader("Accuracy & Model Score")
+        score_data = {
+            "Model": list(metrics["Accuracy_Score"].keys()),
+            "Accuracy": list(metrics["Accuracy_Score"].values()),
+            "Model Score": list(metrics["model_score"].values())
+        }
+        score_df = pd.DataFrame(score_data)
+
+        st.table(score_df.style.format({"Accuracy": "{:.4f}", "Model Score": "{:.4f}"}))
+
+
+        st.subheader("Detailed Metrics")
+        detail_data = {
+            "Model": list(metrics["f1_Score"].keys()),
+            "F1 Score": list(metrics["f1_Score"].values()),
+            "Precision": list(metrics["Precision_Score"].values()),
+            "Recall": list(metrics["recall_score"].values())
+        }
+        detail_df = pd.DataFrame(detail_data)
+        st.table(detail_df.style.format({"F1 Score": "{:.4f}", 
+                                         "Precision": "{:.4f}", 
+                                         "Recall": "{:.4f}"}))
+        
+    elif chart_type == "Confusion Metrics(From training data)":
+        from sklearn.model_selection import train_test_split
+        from sklearn.preprocessing import LabelEncoder
+
+        df_encoded = df.copy()
+
+        le = LabelEncoder()
+        df_encoded["Type"] = le.fit_transform(df_encoded["Type"])
+
+        X = df_encoded[['Type', 'Air temperature [K]','Process temperature [K]', 
+                    'Rotational speed [rpm]', 'Torque [Nm]','Tool wear [min]']]
+        y = df_encoded["Failure Type"]
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42)
+        st.pyplot(confustion_plot(y_test, X_test,rf_model,lr_model))
+
 
     #Dataframe
-    st.subheader("Data")
+    st.divider()
+    st.subheader("Data Used")
     st.dataframe(df)
 
     #Metrics
@@ -189,11 +268,11 @@ elif selected=="Test ML With Custom Values":
                      "Torque(Nm)":torque, "Tool_Wear(min)":tool_wear}
     
     if predict_btn:
-        user_ypred = model.predict(user_data)
+        user_ypred = rf_model.predict(user_data)
         st.header("RESULTS:")
         
         st.divider()
-        st.write(f"Prediction: {user_ypred}")     
+        st.write(f"Prediction: {user_ypred[0]}")     
         
         #Data table
         st.divider()

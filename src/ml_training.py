@@ -129,8 +129,9 @@ def ml_train(data):
         if not os.path.exists(model_dir):
             os.makedirs(model_dir)
             try:
-                joblib.dump(rf_cls, os.path.join(model_dir,"rf_predictive_maintenance.joblib"))
-                print(f"Model created successfully...\nModel saved as rf_predictive_maintenance.joblib in `{model_dir}` directory.")
+                joblib.dump(rf_cls, os.path.join(model_dir, "rf_predictive_maintenance.joblib"))
+                joblib.dump(lr_cls, os.path.join(model_dir, "lr_predictive_maintenance.joblib"))
+                print(f"Models created successfully...\nModel saved as rf_predictive_maintenance.joblib in `{model_dir}` directory.")
             
             except Exception as e:
                 print(f"Error : {e}")
